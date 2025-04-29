@@ -1,3 +1,4 @@
+mod conf;
 mod plugins;
 
 fn main() {
