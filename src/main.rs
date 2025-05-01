@@ -8,7 +8,6 @@ use std::path::{Path};
 use std::error::Error;
 use std::fmt;
 
-
 pub struct FormatterConfig {
     pub wrap_width: usize,
     pub max_header_level: u32,
@@ -80,13 +79,14 @@ impl<'a> MarkdownFormatter<'a> {
         let mut list_number = 1;
         let mut list_start = 1;
         let mut prev_was_list_item = false;
+        let mut list_markers = Vec::new();
 
         for event in events {
             match &event.0 {
                 pulldown_cmark::Event::Start(tag) => {
                     match tag {
                         Tag::Heading { level, .. } => {
-                            let level_num = (*level as u32) as usize;
+                            let level_num = level.to_string().parse::<usize>().unwrap();
                             if level_num <= self.config.max_header_level as usize {
                                 if !is_first_heading {
                                     result.push_str("\n\n");
@@ -101,12 +101,18 @@ impl<'a> MarkdownFormatter<'a> {
                                 result.push('\n');
                             }
                         }
-                        Tag::BlockQuote(_) => {
+                        Tag::BlockQuote(quote_type) => {
                             in_blockquote = true;
                             result.push_str("> ");
                         }
-                        Tag::CodeBlock(_) => {
-                            result.push_str("\n```\n");
+                        Tag::CodeBlock(info) => {
+                            let info_str = match info {
+                                pulldown_cmark::CodeBlockKind::Fenced(lang) if !lang.is_empty() => {
+                                    format!("{}\n", lang)
+                                }
+                                _ => String::new(),
+                            };
+                            result.push_str(&format!("\n```{}\n", info_str));
                         }
                         Tag::List(Some(start)) => {
                             if !in_list {
@@ -116,6 +122,7 @@ impl<'a> MarkdownFormatter<'a> {
                             list_start = *start;
                             list_number = *start;
                             current_indent = " ".repeat(self.config.indent_size as usize);
+                            list_markers.push(('o', *start));
                         }
                         Tag::List(None) => {
                             if !in_list {
@@ -125,26 +132,33 @@ impl<'a> MarkdownFormatter<'a> {
                             list_start = 1;
                             list_number = 1;
                             current_indent = " ".repeat(self.config.indent_size as usize);
+                            list_markers.push(('u', 1));
                         }
                         Tag::Item => {
                             if in_list {
-                                if let Tag::List(Some(_)) = tag {
-                                    let marker = if self.config.consecutive_numbering {
-                                        format!("{}. ", list_number)
+                                if let Some(&(marker_type, _)) = list_markers.last() {
+                                    if marker_type == 'o' {
+                                        let marker = if self.config.consecutive_numbering {
+                                            format!("{}. ", list_number)
+                                        } else {
+                                            let pad = if list_number >= list_start + 10 {
+                                                list_start.to_string().len()
+                                            } else {
+                                                0
+                                            };
+                                            format!("{:0width$}. ", list_number, width=pad)
+                                        };
+                                        if prev_was_list_item {
+                                            result.push('\n');
+                                        }
+                                        result.push_str(&format!("{}{}", current_indent, marker));
+                                        list_number += 1;
                                     } else {
-                                        "1. ".to_string()
-                                    };
-                                    if prev_was_list_item {
-                                        result.push('\n');
+                                        if prev_was_list_item {
+                                            result.push('\n');
+                                        }
+                                        result.push_str(&format!("{}- ", current_indent));
                                     }
-                                    result.push_str(&format!("{}{}", current_indent, marker));
-                                    list_number += 1;
-                                } else {
-                                    if prev_was_list_item {
-                                        result.push('\n');
-                                    }
-                                    // Here fix the indentation for unordered lists
-                                    result.push_str(&format!("{}- ", ""));
                                 }
                                 prev_was_list_item = true;
                             } else {
@@ -158,10 +172,10 @@ impl<'a> MarkdownFormatter<'a> {
                         Tag::Strong => {
                             result.push_str("**");
                         }
-                        Tag::Link { .. } => {
+                        Tag::Link { dest_url, title, .. } => {
                             result.push('[');
                         }
-                        Tag::Image { .. } => {
+                        Tag::Image { dest_url, title, .. } => {
                             result.push_str("![");
                         }
                         _ => {}
@@ -169,14 +183,14 @@ impl<'a> MarkdownFormatter<'a> {
                 }
                 pulldown_cmark::Event::End(tag) => {
                     match tag {
-                        TagEnd::Heading(_) => result.push_str("\n"),
+                        TagEnd::Heading(_) => result.push('\n'),
                         TagEnd::Paragraph => {
                             in_paragraph = false;
                             if !in_list {
                                 result.push('\n');
                             }
                         }
-                        TagEnd::BlockQuote(_) => {
+                        TagEnd::BlockQuote(quote_type) => {
                             in_blockquote = false;
                             result.push('\n');
                         }
@@ -185,6 +199,7 @@ impl<'a> MarkdownFormatter<'a> {
                         }
                         TagEnd::List(_) => {
                             in_list = false;
+                            list_markers.pop();
                             current_indent = "".to_string();
                             prev_was_list_item = false;
                             result.push('\n');
@@ -275,18 +290,6 @@ impl<'a> MarkdownFormatter<'a> {
 
         result
     }
-}
-
-fn main() -> Result<(), String> {
-    let config = FormatterConfig::default();
-    let formatter = MarkdownFormatter::new(&config);
-
-    let input_path = PathBuf::from("input.md");
-    let output_path = Some(PathBuf::from("output.md"));
-
-    formatter.format_markdown(input_path, output_path)?;
-
-    Ok(())
 }
 
 
