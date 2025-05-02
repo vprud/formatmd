@@ -80,13 +80,15 @@ impl<'a> MarkdownFormatter<'a> {
         let mut list_start = 1;
         let mut prev_was_list_item = false;
         let mut list_markers = Vec::new();
-
+        let mut list_indents = Vec::new();
+        let mut continuation_indent = String::new();
+    
         for event in events {
             match &event.0 {
                 pulldown_cmark::Event::Start(tag) => {
                     match tag {
                         Tag::Heading { level, .. } => {
-                            let level_num = level.to_string().parse::<usize>().unwrap();
+                            let level_num = (*level as u32) as usize;
                             if level_num <= self.config.max_header_level as usize {
                                 if !is_first_heading {
                                     result.push_str("\n\n");
@@ -101,18 +103,12 @@ impl<'a> MarkdownFormatter<'a> {
                                 result.push('\n');
                             }
                         }
-                        Tag::BlockQuote(quote_type) => {
+                        Tag::BlockQuote(_) => {
                             in_blockquote = true;
                             result.push_str("> ");
                         }
-                        Tag::CodeBlock(info) => {
-                            let info_str = match info {
-                                pulldown_cmark::CodeBlockKind::Fenced(lang) if !lang.is_empty() => {
-                                    format!("{}\n", lang)
-                                }
-                                _ => String::new(),
-                            };
-                            result.push_str(&format!("\n```{}\n", info_str));
+                        Tag::CodeBlock(_) => {
+                            result.push_str("\n```\n");
                         }
                         Tag::List(Some(start)) => {
                             if !in_list {
@@ -121,7 +117,9 @@ impl<'a> MarkdownFormatter<'a> {
                             in_list = true;
                             list_start = *start;
                             list_number = *start;
-                            current_indent = " ".repeat(self.config.indent_size as usize);
+                            list_indents.push(current_indent.clone());
+                            continuation_indent = format!("{}   ", current_indent);
+                            current_indent = format!("{}", current_indent);
                             list_markers.push(('o', *start));
                         }
                         Tag::List(None) => {
@@ -131,7 +129,9 @@ impl<'a> MarkdownFormatter<'a> {
                             in_list = true;
                             list_start = 1;
                             list_number = 1;
-                            current_indent = " ".repeat(self.config.indent_size as usize);
+                            list_indents.push(current_indent.clone());
+                            continuation_indent = format!("{}   ", current_indent);
+                            current_indent = format!("{}", current_indent);
                             list_markers.push(('u', 1));
                         }
                         Tag::Item => {
@@ -172,10 +172,10 @@ impl<'a> MarkdownFormatter<'a> {
                         Tag::Strong => {
                             result.push_str("**");
                         }
-                        Tag::Link { dest_url, title, .. } => {
+                        Tag::Link { .. } => {
                             result.push('[');
                         }
-                        Tag::Image { dest_url, title, .. } => {
+                        Tag::Image { .. } => {
                             result.push_str("![");
                         }
                         _ => {}
@@ -190,7 +190,7 @@ impl<'a> MarkdownFormatter<'a> {
                                 result.push('\n');
                             }
                         }
-                        TagEnd::BlockQuote(quote_type) => {
+                        TagEnd::BlockQuote(_) => {
                             in_blockquote = false;
                             result.push('\n');
                         }
@@ -200,7 +200,12 @@ impl<'a> MarkdownFormatter<'a> {
                         TagEnd::List(_) => {
                             in_list = false;
                             list_markers.pop();
-                            current_indent = "".to_string();
+                            current_indent = list_indents.pop().unwrap_or_default();
+                            continuation_indent = if !list_indents.is_empty() {
+                                format!("{}    ", list_indents.last().unwrap())
+                            } else {
+                                String::new()
+                            };
                             prev_was_list_item = false;
                             result.push('\n');
                         }
@@ -220,20 +225,27 @@ impl<'a> MarkdownFormatter<'a> {
                     }
                 }
                 pulldown_cmark::Event::Text(text) => {
-                    let text = if self.config.normalize_spaces {
-                        text.trim()
-                            .replace(char::is_whitespace, " ")
-                            .replace("\\", "\\\\")
-                            .replace("*", "\\*")
-                            .replace("_", "\\_")
-                            .replace("[", "\\[")
-                            .replace("]", "\\]")
-                            .replace("<", "\\<")
-                            .replace("`", "\\`")
-                    } else {
-                        text.to_string()
-                    };
-                    result.push_str(&text);
+                    let lines: Vec<&str> = text.split('\n').collect();
+                    for (i, line) in lines.iter().enumerate() {
+                        if i > 0 {
+                            result.push('\n');
+                            result.push_str(&continuation_indent);
+                        }
+                        let line = if self.config.normalize_spaces {
+                            line.trim()
+                                .replace(char::is_whitespace, " ")
+                                .replace("\\", "\\\\")
+                                .replace("*", "\\*")
+                                .replace("_", "\\_")
+                                .replace("[", "\\[")
+                                .replace("]", "\\]")
+                                .replace("<", "\\<")
+                                .replace("`", "\\`")
+                        } else {
+                            line.to_string()
+                        };
+                        result.push_str(&line);
+                    }
                 }
                 pulldown_cmark::Event::Code(code) => {
                     result.push_str(&format!("`{}`", code));
@@ -243,10 +255,12 @@ impl<'a> MarkdownFormatter<'a> {
                         result.push(' ');
                     } else {
                         result.push('\n');
+                        result.push_str(&continuation_indent);
                     }
                 }
                 pulldown_cmark::Event::HardBreak => {
                     result.push_str("\\\n");
+                    result.push_str(&continuation_indent);
                 }
                 pulldown_cmark::Event::Rule => {
                     result.push_str("\n---\n");
@@ -260,13 +274,13 @@ impl<'a> MarkdownFormatter<'a> {
                 _ => {}
             }
         }
-
+    
         // Post-processing
         if self.config.remove_extra_blank_lines {
             let lines: Vec<&str> = result.lines().collect();
             let mut filtered_lines = Vec::new();
             let mut prev_was_empty = false;
-
+    
             for line in lines {
                 let is_empty = line.trim().is_empty();
                 if !is_empty || !prev_was_empty {
@@ -276,24 +290,35 @@ impl<'a> MarkdownFormatter<'a> {
             }
             result = filtered_lines.join("\n");
         }
-
+    
         if self.config.standardize_horizontal_lines {
             result = result.replace("***", "---")
                           .replace("___", "---")
                           .replace("***", "---");
         }
-
+    
         // Ensure trailing newline
         if !result.ends_with('\n') {
             result.push('\n');
         }
-
+    
         result
     }
+
+
 }
 
+fn main() -> Result<(), String> {
+    let config = FormatterConfig::default();
+    let formatter = MarkdownFormatter::new(&config);
 
+    let input_path = PathBuf::from("input.md");
+    let output_path = Some(PathBuf::from("output.md"));
 
+    formatter.format_markdown(input_path, output_path)?;
+
+    Ok(())
+}
 
 
 // Структура для представления тестового случая
