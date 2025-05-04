@@ -1,68 +1,60 @@
-use lazy_static::lazy_static;
-use markdown::{ParseOptions, mdast::Node, message::Message, to_mdast};
-use regex::Regex;
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
-lazy_static! {
-    static ref RE_NEWLINES: Regex = Regex::new(r"\r\n|\r|\n").unwrap();
-}
 
-// Построение списка событий Markdown
-pub fn build_mdit(input: &str) -> Result<Node, Message> {
-    // TODO: Добавить возвращение events.children()
-    let tree = to_mdast(input, &ParseOptions::default());
-    tree
-}
+/// Форматирует Markdown-текст, сохраняя структуру (включая вложенные списки)
+/// и применяя заданные стили форматирования.
+pub fn format_markdown(input: &str) -> String {
+    let parser = Parser::new(input);
+    let mut output = String::new();
+    let mut in_list = false;
+    let mut list_depth = 0;
+    let mut list_number: Option<u64> = None;
 
-// Проверка равенства двух Markdown-текстов
-pub fn is_md_equal(md1: &str, md2: &str) -> bool {
-    let events1 = build_mdit(md1);
-    let events2 = build_mdit(md2);
-
-    // Простое сравнение списков событий.
-    events1 == events2
-}
-
-// Определение типа конца строки
-pub fn detect_newline_type(md: &str, eol_setting: &str) -> &'static str {
-    match eol_setting {
-        "keep" => {
-            if let Some(first_match) = RE_NEWLINES.find(md) {
-                if first_match.as_str() == "\r\n" {
-                    "\r\n"
-                } else {
-                    "\n"
-                }
-            } else {
-                "\n"
+    for event in parser {
+        match event {
+            Event::Start(Tag::List(Some(start))) => {
+                in_list = true;
+                list_depth += 1;
+                list_number = Some(start);
             }
+            Event::End(TagEnd::List(_)) => {
+                list_depth -= 1;
+                if list_depth == 0 {
+                    in_list = false;
+                }
+                list_number = None
+            }
+            Event::Start(Tag::Item) => {
+                let indentItem = indent(list_depth - 1);
+                if let Some(num) = list_number {
+                    output.push_str(&format!("\n{}{}. ", indentItem, num));
+                    list_number = Some(num + 1); // Увеличиваем номер
+                } else {
+                    output.push_str(&format!("\n{}- ", indentItem));
+                }
+            }
+            Event::Text(text) => {
+                output.push_str(&text);
+            }
+            Event::SoftBreak => {
+                output.push('\n');
+                if in_list {
+                    output.push_str(&indent(list_depth));
+                }
+            }
+            Event::HardBreak => {
+                output.push_str("\n\n");
+                if in_list {
+                    output.push_str(&indent(list_depth));
+                }
+            }
+            _ => {}
         }
-        "crlf" => "\r\n",
-        _ => "\n",
     }
+
+    output.trim_start().to_string()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_build_mdit() {
-        let input = "# Title\nParagraph.";
-        let events = build_mdit(input).unwrap();
-        assert_eq!(events.children().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn test_is_md_equal() {
-        let md1 = "# Title\nText here.";
-        let md2 = "# Title\nText here.";
-        assert!(is_md_equal(md1, md2));
-    }
-
-    #[test]
-    fn test_detect_newline_type() {
-        let md = "Line1\r\nLine2";
-        let eol = detect_newline_type(md, "keep");
-        assert_eq!(eol, "\r\n");
-    }
+fn indent(depth: usize) -> String {
+    "   ".repeat(depth)
 }
