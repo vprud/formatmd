@@ -5,8 +5,6 @@ use formatmd::format_markdown;
 mod tests {
     use super::*;
 
-
-
     #[test]
     fn test_numbering_list() {
         let input = r#"
@@ -37,9 +35,9 @@ mod tests {
 "#;
 
         let expected = r#"1. a
-1. b
+2. b
    1. x
-   1. y
+   2. y
       z"#;
 
         let formatted = format_markdown(input);
@@ -76,8 +74,8 @@ mod tests {
 
         let expected = r#"1. First
 2. Second
-  - Nested
-  - Another
+   - Nested
+   - Another
 3. Third"#;
 
         let formatted = format_markdown(input);
