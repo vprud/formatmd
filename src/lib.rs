@@ -1,47 +1,44 @@
-use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 const INDENT: &str = "   "; // 4 пробела для отступов
 
-/// Форматирует Markdown-текст с правильной нумерацией и отступами
+/// Форматирует Markdown-текст с правильной структурой
 pub fn format_markdown(input: &str) -> String {
-    let parser = Parser::new(input);
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_FOOTNOTES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TASKLISTS);
+
+    let parser = Parser::new_ext(input, options);
     let mut output = String::new();
     let mut list_stack = Vec::new(); // Трекер вложенных списков
-    
+
     for event in parser {
         match event {
             Event::Start(Tag::List(Some(start_num))) => {
-                // Начало нумерованного списка
                 list_stack.push(ListInfo {
                     is_ordered: true,
                     current_num: start_num,
-                    max_num: start_num, // Будем обновлять при обработке
                     depth: list_stack.len() + 1,
                 });
             }
             Event::Start(Tag::List(None)) => {
-                // Начало ненумерованного списка
                 list_stack.push(ListInfo {
                     is_ordered: false,
                     current_num: 0,
-                    max_num: 0,
                     depth: list_stack.len() + 1,
                 });
             }
             Event::End(TagEnd::List(_)) => {
-                // Конец списка
                 list_stack.pop();
             }
             Event::Start(Tag::Item) => {
                 if let Some(current_list) = list_stack.last_mut() {
                     let indent = INDENT.repeat(current_list.depth - 1);
-                    
+
                     if current_list.is_ordered {
-                        // Определяем количество цифр для форматирования
-                        let digits = count_digits(current_list.max_num);
-                        let formatted_num = format!("{:0digits$}", current_list.current_num);
-                        
-                        output.push_str(&format!("\n{}{}. ", indent, formatted_num));
+                        output.push_str(&format!("\n{}{}. ", indent, current_list.current_num));
                         current_list.current_num += 1;
                     } else {
                         output.push_str(&format!("\n{}- ", indent));
@@ -49,18 +46,8 @@ pub fn format_markdown(input: &str) -> String {
                 }
             }
             Event::Text(text) => {
+                // Обработка текста с сохранением оригинального форматирования
                 output.push_str(&text);
-                
-                // Обновляем max_num если это нумерованный список
-                if let Some(current_list) = list_stack.last_mut() {
-                    if current_list.is_ordered {
-                        if let Some(num) = extract_number(&text) {
-                            if num > current_list.max_num {
-                                current_list.max_num = num;
-                            }
-                        }
-                    }
-                }
             }
             Event::SoftBreak => {
                 output.push('\n');
@@ -70,48 +57,51 @@ pub fn format_markdown(input: &str) -> String {
             }
             Event::HardBreak => {
                 output.push_str("\n\n");
-                if let Some(current_list) = list_stack.last() {
-                    output.push_str(&INDENT.repeat(current_list.depth));
+            }
+            _ => {
+                // Для всех других событий просто сохраняем оригинальное содержимое
+                if let Some(text) = event_to_text(&event) {
+                    output.push_str(&text);
                 }
             }
-            _ => {}
         }
     }
 
-    output.trim_start().to_string()
+    // Пост-обработка для удаления лишних пробелов и приведения к стандартному формату
+    post_process_markdown(&output)
 }
 
 /// Информация о текущем списке
 struct ListInfo {
     is_ordered: bool,
     current_num: u64,
-    max_num: u64,
     depth: usize,
 }
 
-/// Извлекает число из текста (для определения максимального номера)
-fn extract_number(s: &str) -> Option<u64> {
-    let mut num_str = String::new();
-    for c in s.chars() {
-        if c.is_ascii_digit() {
-            num_str.push(c);
-        } else if !num_str.is_empty() {
-            break;
-        }
+/// Конвертирует событие в текст (упрощенная версия)
+fn event_to_text(event: &Event) -> Option<String> {
+    match event {
+        Event::Text(text) => Some(text.to_string()),
+        Event::Code(code) => Some(format!("`{}`", code)),
+        Event::Html(html) => Some(html.to_string()),
+        _ => None,
     }
-    num_str.parse().ok()
 }
 
-/// Подсчитывает количество цифр в числе
-fn count_digits(n: u64) -> usize {
-    if n == 0 {
-        return 1;
-    }
-    let mut count = 0;
-    let mut num = n;
-    while num > 0 {
-        num /= 10;
-        count += 1;
-    }
-    count
+/// Пост-обработка Markdown для соответствия тест-кейсам
+fn post_process_markdown(input: &str) -> String {
+    let mut output = input.to_string();
+
+    // Удаление лишних пробелов в конце строк
+    output = output
+        .lines()
+        .map(|line| line.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Нормализация пустых строк между блоками
+    output = output.replace("\n\n\n", "\n\n");
+
+    // Удаление лишних пробелов в начале документа
+    output.trim_start().to_string()
 }
