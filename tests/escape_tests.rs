@@ -1,6 +1,5 @@
 use formatmd::format_markdown;
 
-// TODO: fixme
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -12,6 +11,7 @@ mod tests {
         assert_eq!(format_markdown(input), expected);
     }
 
+    // TODO: fix tests below
     #[test]
     fn test_only_escape_first_paren_or_dot() {
         let input = "1\\) Only the first \"\\)\" of a line should be escaped in this paragraph.\n\n1\\. Only the first \"\\.\" of a line should be escaped in this paragraph.\n\nFirst \\. or \\) char should not be escaped here because this line does not look like a list.";

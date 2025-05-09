@@ -13,9 +13,16 @@ pub fn format_markdown(input: &str) -> String {
     let parser = Parser::new_ext(input, options);
     let mut output = String::new();
     let mut list_stack = Vec::new(); // Трекер вложенных списков
+    let mut in_code_block = false;
 
     for event in parser {
         match event {
+            Event::Start(Tag::CodeBlock(_)) => {
+                in_code_block = true;
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                in_code_block = false;
+            }
             Event::Start(Tag::List(Some(start_num))) => {
                 list_stack.push(ListInfo {
                     is_ordered: true,
@@ -36,7 +43,7 @@ pub fn format_markdown(input: &str) -> String {
             Event::Start(Tag::Item) => {
                 if let Some(current_list) = list_stack.last_mut() {
                     let indent = INDENT.repeat(current_list.depth - 1);
-
+                    
                     if current_list.is_ordered {
                         output.push_str(&format!("\n{}{}. ", indent, current_list.current_num));
                         current_list.current_num += 1;
@@ -45,9 +52,16 @@ pub fn format_markdown(input: &str) -> String {
                     }
                 }
             }
+            Event::End(TagEnd::Item) => {
+                // Не добавляем ничего для закрывающего тега элемента списка
+            }
             Event::Text(text) => {
-                // Обработка текста с сохранением оригинального форматирования
-                output.push_str(&text);
+                let processed_text = if in_code_block {
+                    text.to_string()
+                } else {
+                    process_escapes(&text)
+                };
+                output.push_str(&processed_text);
             }
             Event::SoftBreak => {
                 output.push('\n');
@@ -59,7 +73,6 @@ pub fn format_markdown(input: &str) -> String {
                 output.push_str("\n\n");
             }
             _ => {
-                // Для всех других событий просто сохраняем оригинальное содержимое
                 if let Some(text) = event_to_text(&event) {
                     output.push_str(&text);
                 }
@@ -67,8 +80,78 @@ pub fn format_markdown(input: &str) -> String {
         }
     }
 
-    // Пост-обработка для удаления лишних пробелов и приведения к стандартному формату
     post_process_markdown(&output)
+}
+
+/// Обрабатывает экранирование специальных символов
+fn process_escapes(text: &str) -> String {
+    let mut result = String::new();
+    let mut chars = text.chars().peekable();
+    let mut in_link = false;
+    let mut in_image = false;
+
+    while let Some(c) = chars.next() {
+        match c {
+            '[' => {
+                if let Some(next) = chars.peek() {
+                    if *next == ']' {
+                        result.push('[');
+                        continue;
+                    }
+                }
+                result.push(c);
+            }
+            '!' => {
+                if let Some(next) = chars.peek() {
+                    if *next == '[' {
+                        in_image = true;
+                        result.push('!');
+                        continue;
+                    }
+                }
+                result.push(c);
+            }
+            ']' => {
+                if in_link || in_image {
+                    in_link = false;
+                    in_image = false;
+                }
+                result.push(c);
+            }
+            '(' => {
+                if in_image {
+                    in_link = true;
+                }
+                result.push(c);
+            }
+            ')' => {
+                if in_link {
+                    in_link = false;
+                }
+                result.push(c);
+            }
+            '\\' => {
+                // Пропускаем обработку экранированных символов
+                if let Some(next) = chars.next() {
+                    result.push(next);
+                }
+            }
+            '*' | '_' | '`' | '~' | '+' | '-' | '=' | '!' | '<' | '>' | '|' => {
+                // Экранируем только если символ может быть частью синтаксиса
+                result.push('\\');
+                result.push(c);
+            }
+            '#' => {
+                // Не экранируем #, так как он может быть частью текста (например, в issue номерах)
+                result.push(c);
+            }
+            _ => {
+                result.push(c);
+            }
+        }
+    }
+
+    result
 }
 
 /// Информация о текущем списке
@@ -100,7 +183,9 @@ fn post_process_markdown(input: &str) -> String {
         .join("\n");
 
     // Нормализация пустых строк между блоками
-    output = output.replace("\n\n\n", "\n\n");
+    while output.contains("\n\n\n") {
+        output = output.replace("\n\n\n", "\n\n");
+    }
 
     // Удаление лишних пробелов в начале документа
     output.trim_start().to_string()
